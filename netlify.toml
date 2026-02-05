@@ -5,8 +5,3 @@
   from = "/api/2fa"
   to = "/.netlify/functions/2fa-code"
   status = 200
-
-[[redirects]]
-  from = "/api/set-user"
-  to = "/.netlify/functions/set-user"
-  status = 200

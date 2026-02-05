@@ -1,26 +1,10 @@
 const crypto = require('crypto');
-const { loadUsersConfig, normalizePhone } = require('./lib/config-store');
 
 const TIME_STEP_SECONDS = 30;
 const DEFAULT_DIGITS = 6;
 
-function phoneCandidates(phoneNumber = '') {
-  const normalized = normalizePhone(phoneNumber);
-  if (!normalized) {
-    return [];
-  }
-
-  const candidates = new Set([normalized]);
-
-  if (normalized.startsWith('972')) {
-    candidates.add(`0${normalized.slice(3)}`);
-  }
-
-  if (normalized.startsWith('0')) {
-    candidates.add(`972${normalized.slice(1)}`);
-  }
-
-  return Array.from(candidates);
+function normalizePhone(phoneNumber = '') {
+  return String(phoneNumber).replace(/\D/g, '');
 }
 
 function base32ToBuffer(base32) {
@@ -64,116 +48,73 @@ function generateTotp(secret, timestamp = Date.now(), digits = DEFAULT_DIGITS) {
   return { code, secondsRemaining };
 }
 
-function buildResponse(statusCode, body, contentType = 'application/json; charset=utf-8') {
-  const isObject = typeof body === 'object';
-  const payload = isObject ? JSON.stringify(body) : String(body);
+function loadUsersConfig() {
+  const raw = process.env.USERS_CONFIG;
+  if (!raw) {
+    throw new Error('USERS_CONFIG environment variable is missing.');
+  }
 
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('USERS_CONFIG is not valid JSON.');
+  }
+
+  return Object.entries(parsed).reduce((acc, [phone, services]) => {
+    acc[normalizePhone(phone)] = services;
+    return acc;
+  }, {});
+}
+
+function buildResponse(statusCode, body) {
   return {
     statusCode,
     headers: {
-      'Content-Type': contentType,
-      'Access-Control-Allow-Origin': '*'
+      'Content-Type': 'application/json; charset=utf-8'
     },
-    body: payload
+    body: JSON.stringify(body)
   };
-}
-
-function parseFormBody(rawBody = '') {
-  return Object.fromEntries(new URLSearchParams(rawBody));
-}
-
-function parseRequestInput(event) {
-  const query = event.queryStringParameters || {};
-
-  if (event.httpMethod === 'POST' && event.body) {
-    const contentType = event.headers?.['content-type'] || event.headers?.['Content-Type'] || '';
-
-    if (contentType.includes('application/json')) {
-      return { ...query, ...JSON.parse(event.body) };
-    }
-
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      return { ...query, ...parseFormBody(event.body) };
-    }
-  }
-
-  return query;
-}
-
-function findUserByPhone(users, phoneInput) {
-  for (const candidate of phoneCandidates(phoneInput)) {
-    if (users[candidate]) {
-      return { normalizedPhone: candidate, services: users[candidate] };
-    }
-  }
-
-  return null;
-}
-
-function authorize(event, input) {
-  const suppliedKey =
-    event.headers?.['x-api-key'] ||
-    event.headers?.['X-API-Key'] ||
-    input.key;
-
-  if (process.env.API_KEY && suppliedKey !== process.env.API_KEY) {
-    return false;
-  }
-
-  return true;
-}
-
-function codeToSpeakable(code) {
-  return String(code).split('').join(' ');
 }
 
 exports.handler = async (event) => {
   try {
-    if (event.httpMethod === 'OPTIONS') {
-      return buildResponse(204, '', 'text/plain; charset=utf-8');
-    }
+    const query = event.queryStringParameters || {};
+    const suppliedKey = event.headers?.['x-api-key'] || query.key;
 
-    const input = parseRequestInput(event);
-
-    if (!authorize(event, input)) {
+    if (process.env.API_KEY && suppliedKey !== process.env.API_KEY) {
       return buildResponse(401, { error: 'Unauthorized' });
     }
 
-    const phone = input.phone;
-    if (!normalizePhone(phone)) {
-      return buildResponse(400, { error: 'Missing required parameter: phone' });
+    const phone = normalizePhone(query.phone);
+    if (!phone) {
+      return buildResponse(400, { error: 'Missing required query parameter: phone' });
     }
 
-    const users = await loadUsersConfig();
-    const match = findUserByPhone(users, phone);
-
-    if (!match) {
+    const users = loadUsersConfig();
+    const userServices = users[phone];
+    if (!userServices) {
       return buildResponse(404, { error: 'Phone number is not configured' });
     }
 
-    const requestedService = input.service;
-    const entries = Object.entries(match.services).filter(([service]) => !requestedService || service === requestedService);
+    const requestedService = query.service;
+    const entries = Object.entries(userServices).filter(([service]) => {
+      return !requestedService || service === requestedService;
+    });
 
     if (entries.length === 0) {
       return buildResponse(404, { error: `Service '${requestedService}' is not configured for this phone` });
     }
 
-    const codes = Object.fromEntries(entries.map(([service, secret]) => [service, generateTotp(secret)]));
-    const responseMode = input.response || 'json';
-
-    if (responseMode === 'text') {
-      if (entries.length !== 1) {
-        return buildResponse(400, { error: 'Text response requires exactly one service. Add ?service=...' });
-      }
-
-      const [serviceName] = entries[0];
-      const code = codes[serviceName].code;
-      const sayCode = String(input.speak).toLowerCase() === 'true' ? codeToSpeakable(code) : code;
-      return buildResponse(200, sayCode, 'text/plain; charset=utf-8');
-    }
+    const codes = Object.fromEntries(
+      entries.map(([service, secret]) => {
+        const totp = generateTotp(secret);
+        return [service, totp];
+      })
+    );
 
     return buildResponse(200, {
-      phone: match.normalizedPhone,
+      phone,
       codes,
       generatedAt: new Date().toISOString()
     });
@@ -184,10 +125,7 @@ exports.handler = async (event) => {
 
 exports._internal = {
   base32ToBuffer,
-  codeToSpeakable,
-  findUserByPhone,
   generateTotp,
   normalizePhone,
-  parseRequestInput,
-  phoneCandidates
+  loadUsersConfig
 };

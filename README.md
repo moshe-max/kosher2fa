@@ -2,72 +2,68 @@
 
 A kosher-friendly way to get 2FA authentication codes over phone systems like [call2all.co.il](https://call2all.co.il).
 
-## Ready endpoint (your Netlify permalink)
+## What this project provides
 
-Base URL:
+This repo now includes a Netlify Function endpoint that:
 
-```text
-https://6984fdddfc90826c6497b6a2--dreamy-griffin-7c104b.netlify.app
-```
+- Accepts a phone number (`phone`) and optional service name (`service`)
+- Supports multiple users by phone number
+- Generates TOTP codes (Google Authenticator format) for configured services (for example `gmail`)
+- Can be protected with an API key (`x-api-key` header or `key` query param)
 
-## Endpoints
+Endpoint path after deploy:
 
-### 1) Get 2FA code
+- `GET /api/2fa?phone=972501234567`
+- `GET /api/2fa?phone=972501234567&service=gmail`
 
-```text
-GET /api/2fa
-```
+## 1) Configure Netlify environment variables
 
-Parameters:
-- `phone` (required)
-- `service` (optional, recommended)
-- `key` or header `x-api-key` (if `API_KEY` is set)
-- `response=text` (optional plain text mode for IVR)
-- `speak=true` (optional spaced digits for TTS)
+In Netlify site settings, add:
 
-Example for Call2All voice:
+### `USERS_CONFIG`
 
-```text
-https://6984fdddfc90826c6497b6a2--dreamy-griffin-7c104b.netlify.app/api/2fa?phone={{phone}}&service=gmail&response=text&speak=true&key=YOUR_KEY
-```
+JSON object where keys are phone numbers and values are service-to-secret maps.
 
-### 2) Set/update a user value (new)
-
-```text
-POST /api/set-user
-```
-
-Body (JSON or form):
+Example:
 
 ```json
 {
-  "phone": "0501234567",
-  "service": "gmail",
-  "secret": "JBSWY3DPEHPK3PXP"
-}
-```
-
-Auth for set endpoint:
-- Header: `x-admin-key: YOUR_ADMIN_KEY`
-- Or body/query: `adminKey=YOUR_ADMIN_KEY`
-
-This endpoint updates the live in-memory config on the running function instance (fast for immediate use). For permanent storage, also update `USERS_CONFIG` in Netlify environment settings.
-
-## Environment variables
-
-- `API_KEY` - protects `/api/2fa` (recommended)
-- `ADMIN_KEY` - required for `/api/set-user`
-- `USERS_CONFIG` - bootstrap/persistent JSON config loaded when function starts
-
-Example `USERS_CONFIG`:
-
-```json
-{
-  "0501234567": {
-    "gmail": "JBSWY3DPEHPK3PXP"
+  "972501234567": {
+    "gmail": "JBSWY3DPEHPK3PXP",
+    "github": "NB2W45DFOIZA===="
+  },
+  "972541112233": {
+    "gmail": "MZXW6YTBOI======"
   }
 }
 ```
+
+> Secrets must be Base32 TOTP secrets from the account setup QR/secret.
+
+### `API_KEY` (recommended)
+
+Set a strong value. Requests must include this key:
+
+- Header: `x-api-key: YOUR_KEY`
+- Or query param: `?key=YOUR_KEY`
+
+## 2) Deploy to Netlify
+
+1. Push this repo to GitHub.
+2. In Netlify, **Add new site** → **Import from Git**.
+3. Select this repo.
+4. Deploy (no build command required).
+5. Add environment variables (`USERS_CONFIG`, `API_KEY`) and redeploy.
+
+## 3) Connect Call2All
+
+Use Call2All webhook/integration to call:
+
+```text
+https://YOUR_NETLIFY_SITE/api/2fa?phone={{phone}}&service=gmail&key=YOUR_KEY
+```
+
+Replace `{{phone}}` with Call2All's caller phone variable.
 
 ## Local test
 
