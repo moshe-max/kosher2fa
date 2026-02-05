@@ -1,0 +1,7 @@
+[build]
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/api/2fa"
+  to = "/.netlify/functions/2fa-code"
+  status = 200
